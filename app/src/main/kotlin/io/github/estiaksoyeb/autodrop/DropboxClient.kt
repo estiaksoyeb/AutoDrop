@@ -93,4 +93,26 @@ class DropboxClient(private val accessToken: String) {
             }
         }
     }
+
+    suspend fun createFolder(path: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val jsonBody = JSONObject()
+                jsonBody.put("path", path)
+                jsonBody.put("autorename", false)
+
+                val request = Request.Builder()
+                    .url("https://api.dropboxapi.com/2/files/create_folder_v2")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .post(jsonBody.toString().toRequestBody(jsonMediaType))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                response.isSuccessful
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
 }

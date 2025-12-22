@@ -37,6 +37,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DropboxFolderPicker(
@@ -51,12 +57,23 @@ fun DropboxFolderPicker(
     val currentPath = remember { mutableStateOf("") }
     val items = remember { mutableStateOf<List<DropboxItem>>(emptyList()) }
     val isLoading = remember { mutableStateOf(false) }
+    
+    // Create Folder State
+    val showCreateDialog = remember { mutableStateOf(false) }
+    val newFolderName = remember { mutableStateOf("") }
+
+    // Helper to reload
+    fun loadItems() {
+        scope.launch {
+            isLoading.value = true
+            items.value = client.listFolder(currentPath.value)
+            isLoading.value = false
+        }
+    }
 
     // Load items when path changes
     LaunchedEffect(currentPath.value) {
-        isLoading.value = true
-        items.value = client.listFolder(currentPath.value)
-        isLoading.value = false
+        loadItems()
     }
 
     Scaffold(
@@ -79,6 +96,11 @@ fun DropboxFolderPicker(
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showCreateDialog.value = true }) {
+                Icon(Icons.Default.Add, contentDescription = "Create Folder")
+            }
         }
     ) { padding ->
         Column(
@@ -130,6 +152,43 @@ fun DropboxFolderPicker(
                 }
             }
         }
+    }
+    
+    if (showCreateDialog.value) {
+        AlertDialog(
+            onDismissRequest = { showCreateDialog.value = false },
+            title = { Text("Create New Folder") },
+            text = {
+                TextField(
+                    value = newFolderName.value,
+                    onValueChange = { newFolderName.value = it },
+                    label = { Text("Folder Name") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (newFolderName.value.isNotEmpty()) {
+                        scope.launch {
+                            val basePath = if (currentPath.value == "") "" else currentPath.value
+                            val newPath = "$basePath/${newFolderName.value}"
+                            val success = client.createFolder(newPath)
+                            if (success) {
+                                loadItems() // Refresh list
+                            }
+                            showCreateDialog.value = false
+                            newFolderName.value = ""
+                        }
+                    }
+                }) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog.value = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

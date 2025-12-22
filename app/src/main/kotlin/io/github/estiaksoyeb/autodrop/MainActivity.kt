@@ -112,11 +112,14 @@ class MainActivity : ComponentActivity() {
                     onCancel = { showFolderPicker.value = false }
                 )
             } else {
+                val currentLocalUri = selectedLocalUri.value
+                val friendlyLocalPath = if (currentLocalUri != null) getFriendlyPath(currentLocalUri) else "None"
+
                 AppEntryPoint(
                     isLoggedIn = isLoggedInState.value,
                     userName = userNameState.value,
                     selectedPath = selectedDropboxPath.value,
-                    selectedLocalPath = selectedLocalUri.value?.path ?: "None",
+                    selectedLocalPath = friendlyLocalPath,
                     syncStatus = syncStatus.value,
                     onConnect = { authManager.startAuthFlow(this) },
                     onLogout = { 
@@ -159,6 +162,14 @@ class MainActivity : ComponentActivity() {
     
     // ... existing onNewIntent, checkIntent, fetchUserInfo ...
     
+    private fun getFriendlyPath(uri: android.net.Uri): String {
+        val path = uri.path ?: return uri.toString()
+        if (path.contains("tree/primary:")) {
+            return path.replace("/tree/primary:", "/storage/emulated/0/")
+        }
+        return path
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // If the activity is already running (singleTask), this is called
