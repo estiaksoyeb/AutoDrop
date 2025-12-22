@@ -31,37 +31,64 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     
     private lateinit var authManager: AuthManager
     private lateinit var syncManager: SyncManager
+    private lateinit var syncRepository: SyncRepository
     
-    // Simple state holder for the Activity
+    // State
     private var isLoggedInState = mutableStateOf(false)
     private var userNameState = mutableStateOf("")
-    private var showFolderPicker = mutableStateOf(false)
-    private var selectedDropboxPath = mutableStateOf("None")
-    private var selectedLocalUri = mutableStateOf<android.net.Uri?>(null)
+    private var syncPairsState = mutableStateOf<List<SyncPair>>(emptyList())
+    private var historyLogsState = mutableStateOf<List<SyncHistoryLog>>(emptyList())
+    
+    // Navigation State
+    private var currentScreen = mutableStateOf("home") // "home" or "history"
+    
+    // Add Flow State
+    private var isAddingPair = mutableStateOf(false)
+    private var tempDropboxPath = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         authManager = AuthManager(this)
         syncManager = SyncManager(this, authManager)
+        syncRepository = SyncRepository(this)
         
-        // Load prefs
-        val prefs = getSharedPreferences("autodrop_prefs", Context.MODE_PRIVATE)
-        val savedLocal = prefs.getString("local_uri", null)
-        val savedRemote = prefs.getString("dropbox_path", null)
-        
-        if (savedLocal != null) selectedLocalUri.value = android.net.Uri.parse(savedLocal)
-        if (savedRemote != null) selectedDropboxPath.value = savedRemote
-        
+        // Load initial state
         isLoggedInState.value = authManager.hasToken()
-        
         if (isLoggedInState.value) {
             fetchUserInfo()
+            loadData()
         }
 
         // --- THE "CHROME" SETUP ---
@@ -73,7 +100,6 @@ class MainActivity : ComponentActivity() {
         insetsController.isAppearanceLightStatusBars = true
         insetsController.isAppearanceLightNavigationBars = true
 
-        // Check if we were launched from the redirect
         checkIntent(intent)
 
         setContent {
@@ -85,104 +111,117 @@ class MainActivity : ComponentActivity() {
                 contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
             ) { uri ->
                 if (uri != null) {
-                    // Persist permission
                     val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     context.contentResolver.takePersistableUriPermission(uri, takeFlags)
                     
-                    selectedLocalUri.value = uri
+                    val dropboxPath = tempDropboxPath.value
+                    if (dropboxPath != null) {
+                        val newPair = SyncPair(
+                            localUri = uri.toString(),
+                            dropboxPath = dropboxPath
+                        )
+                        syncRepository.addSyncPair(newPair)
+                        loadData() // Refresh list
+                        scheduleBackgroundSync()
+                    }
                     
-                    // Save to Prefs
-                    prefs.edit().putString("local_uri", uri.toString()).apply()
-                    scheduleBackgroundSync()
+                    // Reset State
+                    isAddingPair.value = false
+                    tempDropboxPath.value = null
+                } else {
+                    // Cancelled local picker
+                     isAddingPair.value = false
+                     tempDropboxPath.value = null
                 }
             }
 
-            if (showFolderPicker.value && isLoggedInState.value) {
+            if (isAddingPair.value && isLoggedInState.value) {
                 DropboxFolderPicker(
                     accessToken = authManager.getAccessToken() ?: "",
                     onFolderSelected = { folder ->
-                        selectedDropboxPath.value = folder.pathDisplay
-                        showFolderPicker.value = false
-                        
-                        // Save to Prefs
-                        prefs.edit().putString("dropbox_path", folder.pathDisplay).apply()
-                        scheduleBackgroundSync()
+                        tempDropboxPath.value = folder.pathDisplay
+                        localFolderLauncher.launch(null)
                     },
-                    onCancel = { showFolderPicker.value = false }
+                    onCancel = { 
+                        isAddingPair.value = false 
+                        tempDropboxPath.value = null
+                    }
                 )
             } else {
-                val currentLocalUri = selectedLocalUri.value
-                val friendlyLocalPath = if (currentLocalUri != null) getFriendlyPath(currentLocalUri) else "None"
-
-                AppEntryPoint(
+                MainScreen(
+                    currentScreen = currentScreen.value,
                     isLoggedIn = isLoggedInState.value,
                     userName = userNameState.value,
-                    selectedPath = selectedDropboxPath.value,
-                    selectedLocalPath = friendlyLocalPath,
-                    syncStatus = syncStatus.value,
+                    syncPairs = syncPairsState.value,
+                    historyLogs = historyLogsState.value,
+                    globalSyncStatus = syncStatus.value,
+                    onNavigate = { currentScreen.value = it },
                     onConnect = { authManager.startAuthFlow(this) },
                     onLogout = { 
                         authManager.logout() 
                         isLoggedInState.value = false
                         userNameState.value = ""
-                        selectedDropboxPath.value = "None"
-                        selectedLocalUri.value = null
-                        prefs.edit().clear().apply()
+                        syncRepository.clearAll()
+                        loadData()
                         WorkManager.getInstance(this).cancelUniqueWork("AutoDropSync")
                     },
-                    onPickFolder = { showFolderPicker.value = true },
-                    onPickLocalFolder = { localFolderLauncher.launch(null) },
-                    onSyncNow = {
-                        val uri = selectedLocalUri.value
-                        val path = selectedDropboxPath.value
-                        if (uri != null && path != "None") {
-                            lifecycleScope.launch {
-                                syncManager.syncNow(uri, path)
-                            }
+                    onAddPair = { isAddingPair.value = true },
+                    onDeletePair = { id ->
+                        syncRepository.removeSyncPair(id)
+                        loadData()
+                    },
+                    onSyncAll = {
+                        lifecycleScope.launch {
+                            syncManager.syncAllNow()
+                            loadData() // Refresh history after sync
                         }
+                    },
+                    onClearHistory = {
+                        syncRepository.clearHistory()
+                        loadData()
+                    },
+                    onRefreshHistory = {
+                         loadData()
                     }
                 )
             }
         }
     }
     
+    private fun loadData() {
+        syncPairsState.value = syncRepository.getSyncPairs()
+        historyLogsState.value = syncRepository.getHistoryLogs()
+    }
+    
     private fun scheduleBackgroundSync() {
-        if (selectedLocalUri.value != null && selectedDropboxPath.value != "None") {
+        val pairs = syncRepository.getSyncPairs()
+        if (pairs.isNotEmpty()) {
             val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
                 .build()
             
             WorkManager.getInstance(this).enqueueUniquePeriodicWork(
                 "AutoDropSync",
-                ExistingPeriodicWorkPolicy.KEEP, // Don't replace if already scheduled
+                ExistingPeriodicWorkPolicy.KEEP,
                 syncRequest
             )
+        } else {
+             WorkManager.getInstance(this).cancelUniqueWork("AutoDropSync")
         }
     }
     
-    // ... existing onNewIntent, checkIntent, fetchUserInfo ...
-    
-    private fun getFriendlyPath(uri: android.net.Uri): String {
-        val path = uri.path ?: return uri.toString()
-        if (path.contains("tree/primary:")) {
-            return path.replace("/tree/primary:", "/storage/emulated/0/")
-        }
-        return path
-    }
-
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // If the activity is already running (singleTask), this is called
         checkIntent(intent)
     }
 
     private fun checkIntent(intent: Intent?) {
         if (intent == null) return
-        
         lifecycleScope.launch {
             if (authManager.handleRedirect(intent)) {
                 isLoggedInState.value = true
                 fetchUserInfo()
+                loadData()
             }
         }
     }
@@ -197,76 +236,206 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppEntryPoint(
+fun MainScreen(
+    currentScreen: String,
     isLoggedIn: Boolean,
     userName: String,
-    selectedPath: String,
-    selectedLocalPath: String,
-    syncStatus: String = "Idle",
-    onConnect: () -> Unit = {},
-    onLogout: () -> Unit = {},
-    onPickFolder: () -> Unit = {},
-    onPickLocalFolder: () -> Unit = {},
-    onSyncNow: () -> Unit = {}
+    syncPairs: List<SyncPair>,
+    historyLogs: List<SyncHistoryLog>,
+    globalSyncStatus: String,
+    onNavigate: (String) -> Unit,
+    onConnect: () -> Unit,
+    onLogout: () -> Unit,
+    onAddPair: () -> Unit,
+    onDeletePair: (String) -> Unit,
+    onSyncAll: () -> Unit,
+    onClearHistory: () -> Unit,
+    onRefreshHistory: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.White),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = if (isLoggedIn) {
-                    if (userName.isNotEmpty()) "Hello, $userName!" else "Connected!"
-                } else {
-                    "AutoDrop"
-                },
-                color = Color.Black,
-                style = MaterialTheme.typography.headlineMedium
-            )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            if (isLoggedIn) {
-                 Text(text = "Dropbox Folder: $selectedPath")
-                 Spacer(modifier = Modifier.height(8.dp))
-                 Button(onClick = onPickFolder) {
-                    Text("Select Dropbox Folder")
-                 }
-                 
-                 Spacer(modifier = Modifier.height(16.dp))
-                 
-                 Text(text = "Local Folder: $selectedLocalPath")
-                 Spacer(modifier = Modifier.height(8.dp))
-                 Button(onClick = onPickLocalFolder) {
-                    Text("Select Local Folder")
-                 }
-
-                 Spacer(modifier = Modifier.height(24.dp))
-                 
-                 Text(text = "Status: $syncStatus", color = Color.DarkGray)
-                 Spacer(modifier = Modifier.height(8.dp))
-                 Button(onClick = onSyncNow, enabled = selectedPath != "None" && selectedLocalPath != "None") {
-                    Text("Sync Now")
-                 }
-                 
-                 Spacer(modifier = Modifier.height(24.dp))
-                 Button(onClick = onLogout) {
-                    Text("Disconnect")
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (isLoggedIn) "AutoDrop: $userName" else "AutoDrop") },
+                actions = {
+                    if (currentScreen == "history" && isLoggedIn) {
+                        IconButton(onClick = onRefreshHistory) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                        }
+                        IconButton(onClick = onClearHistory) {
+                            Icon(Icons.Default.Delete, contentDescription = "Clear History")
+                        }
+                    }
                 }
-            } else {
+            )
+        },
+        bottomBar = {
+            if (isLoggedIn) {
+                NavigationBar {
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                        label = { Text("Home") },
+                        selected = currentScreen == "home",
+                        onClick = { onNavigate("home") }
+                    )
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Default.Info, contentDescription = "History") },
+                        label = { Text("History") },
+                        selected = currentScreen == "history",
+                        onClick = { onNavigate("history") }
+                    )
+                }
+            }
+        },
+        floatingActionButton = {
+            if (isLoggedIn && currentScreen == "home") {
+                FloatingActionButton(onClick = onAddPair) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Sync Pair")
+                }
+            }
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(Color.White),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!isLoggedIn) {
                 Button(onClick = onConnect) {
                     Text("Connect Dropbox")
+                }
+            } else {
+                if (currentScreen == "home") {
+                    HomeScreen(syncPairs, globalSyncStatus, onSyncAll, onDeletePair, onLogout)
+                } else {
+                    HistoryScreen(historyLogs)
                 }
             }
         }
     }
 }
 
-@Preview(showBackground = true)
 @Composable
-fun DefaultPreview() {
-    AppEntryPoint(isLoggedIn = false, userName = "", selectedPath = "None", selectedLocalPath = "None")
+fun HomeScreen(
+    syncPairs: List<SyncPair>,
+    globalSyncStatus: String,
+    onSyncAll: () -> Unit,
+    onDeletePair: (String) -> Unit,
+    onLogout: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Status Bar
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+            modifier = Modifier.fillMaxWidth().padding(8.dp)
+        ) {
+            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Status: $globalSyncStatus", style = MaterialTheme.typography.bodyMedium)
+                }
+                Button(onClick = onSyncAll) {
+                    Text("Sync All")
+                }
+            }
+        }
+
+        // List of Pairs
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        ) {
+            items(syncPairs) { pair ->
+                SyncPairItem(pair, onDelete = { onDeletePair(pair.id) })
+            }
+            if (syncPairs.isEmpty()) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        Text("No sync folders configured. Tap + to add one.", color = Color.Gray)
+                    }
+                }
+            }
+        }
+        
+        Button(
+            onClick = onLogout, 
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp)
+        ) {
+            Text("Disconnect Account")
+        }
+    }
+}
+
+@Composable
+fun HistoryScreen(logs: List<SyncHistoryLog>) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(logs) { log ->
+            HistoryLogItem(log)
+        }
+        if (logs.isEmpty()) {
+            item {
+                Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    Text("No history yet.", color = Color.Gray)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HistoryLogItem(log: SyncHistoryLog) {
+    val dateFormat = SimpleDateFormat("MMM dd, HH:mm:ss", Locale.getDefault())
+    val dateStr = dateFormat.format(Date(log.timestamp))
+    
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = log.summary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(text = dateStr, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            }
+            if (log.details.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = log.details, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+fun SyncPairItem(pair: SyncPair, onDelete: () -> Unit) {
+    
+    fun getFriendlyLocal(uri: String): String {
+        val path = android.net.Uri.parse(uri).path ?: return uri
+        if (path.contains("tree/primary:")) {
+            return path.replace("/tree/primary:", "/storage/emulated/0/")
+        }
+        return path
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Dropbox: ${pair.dropboxPath}", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = "Local: ${getFriendlyLocal(pair.localUri)}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = "Last: ${pair.lastSyncStatus}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF1976D2))
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+            }
+        }
+    }
 }
