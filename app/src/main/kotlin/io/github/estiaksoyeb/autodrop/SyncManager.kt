@@ -28,7 +28,7 @@ class SyncManager(private val context: Context, private val authManager: AuthMan
             
             if (pairs.isEmpty()) {
                 _syncStatus.value = "No folders configured."
-                repo.addLog(SyncHistoryLog(pairId = "GLOBAL", summary = "Sync Skipped", details = "No folder pairs configured"))
+                repo.addLog(SyncHistoryLog(message = "Sync Skipped: No folder pairs configured", type = LogType.INFO))
                 return@withContext
             }
 
@@ -43,7 +43,7 @@ class SyncManager(private val context: Context, private val authManager: AuthMan
                 try {
                     val localFolder = DocumentFile.fromTreeUri(context, Uri.parse(pair.localUri))
                     if (localFolder == null || !localFolder.exists()) {
-                         repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Failed", details = "Local folder missing: ${pair.localUri}"))
+                         repo.addLog(SyncHistoryLog(message = "Sync Failed: Local folder missing", details = pair.localUri, type = LogType.ERROR))
                          continue
                     }
 
@@ -52,22 +52,25 @@ class SyncManager(private val context: Context, private val authManager: AuthMan
                         context = context,
                         pair = pair,
                         client = client,
-                        onProgress = { msg -> _syncStatus.value = msg }
+                        onLog = { log -> 
+                            repo.addLog(log)
+                            _syncStatus.value = log.message
+                        }
                     )
 
                     if (changeCount > 0) {
-                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Success", details = "Processed $changeCount changes"))
+                        repo.addLog(SyncHistoryLog(message = "Sync Success: Processed $changeCount changes"))
                         totalUploaded += changeCount
                     } else {
-                         repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Completed", details = "No changes for ${pair.dropboxPath}"))
+                         repo.addLog(SyncHistoryLog(message = "Sync Completed: No changes for ${pair.dropboxPath}"))
                     }
                 } catch (e: Exception) {
-                    repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Error", details = e.message ?: "Unknown error"))
+                    repo.addLog(SyncHistoryLog(message = "Sync Error: ${e.message}", type = LogType.ERROR))
                 }
             }
             
             _syncStatus.value = "Complete. Processed $totalUploaded items."
-            repo.addLog(SyncHistoryLog(pairId = "GLOBAL", summary = "Manual Sync Complete", details = "Total items processed: $totalUploaded"))
+            repo.addLog(SyncHistoryLog(message = "Manual Sync Cycle Complete. Total: $totalUploaded", type = LogType.INFO))
         }
     }
 }

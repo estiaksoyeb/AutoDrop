@@ -37,7 +37,7 @@ class SyncWorker(
                     
                     if (localFolder == null || !localFolder.exists()) {
                          repo.updateSyncStatus(pair.id, "Error: Folder missing")
-                         repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Auto-Sync Failed", details = "Folder missing: ${pair.localUri}"))
+                         repo.addLog(SyncHistoryLog(message = "Auto-Sync Failed: Folder missing", details = pair.localUri, type = LogType.ERROR))
                          continue
                     }
 
@@ -46,16 +46,19 @@ class SyncWorker(
                         context = applicationContext,
                         pair = pair,
                         client = client,
-                        onProgress = { msg -> repo.updateSyncStatus(pair.id, msg) }
+                        onLog = { log -> 
+                            repo.addLog(log)
+                            repo.updateSyncStatus(pair.id, log.message)
+                        }
                     )
 
                     repo.updateSyncStatus(pair.id, "Success: $changeCount changes")
                     if (changeCount > 0) {
-                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Auto-Sync Success", details = "Processed $changeCount changes"))
+                        repo.addLog(SyncHistoryLog(message = "Auto-Sync Success: Processed $changeCount changes"))
                     }
                 } catch (e: Exception) {
                     repo.updateSyncStatus(pair.id, "Error: ${e.message}")
-                    repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Auto-Sync Error", details = e.message ?: "Unknown"))
+                    repo.addLog(SyncHistoryLog(message = "Auto-Sync Error: ${e.message}", type = LogType.ERROR))
                 }
             }
             

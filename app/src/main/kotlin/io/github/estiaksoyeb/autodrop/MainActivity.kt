@@ -515,22 +515,43 @@ fun HistoryScreen(logs: List<SyncHistoryLog>) {
 
 @Composable
 fun HistoryLogItem(log: SyncHistoryLog) {
-    val dateFormat = SimpleDateFormat("MMM dd, HH:mm:ss", Locale.getDefault())
+    val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val dateStr = dateFormat.format(Date(log.timestamp))
     
+    val containerColor = when(log.type) {
+        LogType.ERROR -> Color(0xFFFFEBEE)
+        LogType.CONFLICT -> Color(0xFFFFF8E1)
+        LogType.START, LogType.END -> Color(0xFFE3F2FD)
+        else -> Color.White
+    }
+
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA)),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text(text = log.summary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                Text(text = dateStr, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Text(
+                    text = "[$dateStr]", 
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = log.message, 
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    modifier = Modifier.weight(1f)
+                )
             }
-            if (log.details.isNotEmpty()) {
+            if (!log.details.isNullOrEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(text = log.details, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = log.details, 
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = Color.Red,
+                    modifier = Modifier.padding(start = 64.dp)
+                )
             }
         }
     }

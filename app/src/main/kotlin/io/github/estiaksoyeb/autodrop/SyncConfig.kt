@@ -24,12 +24,16 @@ data class SyncPair(
     val excludedPaths: List<String> = emptyList()
 )
 
+enum class LogType {
+    START, END, INFO, ERROR, CONFLICT
+}
+
 data class SyncHistoryLog(
     val id: String = UUID.randomUUID().toString(),
     val timestamp: Long = System.currentTimeMillis(),
-    val pairId: String, // Can be "GLOBAL" or specific pair ID
-    val summary: String,
-    val details: String = ""
+    val type: LogType = LogType.INFO,
+    val message: String,
+    val details: String? = null
 )
 
 class SyncRepository(context: Context) {
@@ -78,11 +82,11 @@ class SyncRepository(context: Context) {
     
     fun addLog(log: SyncHistoryLog) {
         val current = getHistoryLogs().toMutableList()
-        // Keep only last 100 logs
-        if (current.size >= 100) {
+        // Keep last 1000 lines for terminal feel
+        if (current.size >= 1000) {
             current.removeAt(current.lastIndex)
         }
-        current.add(0, log) // Add to top
+        current.add(0, log) // Add to top (newest first)
         val json = gson.toJson(current)
         prefs.edit().putString("sync_history", json).apply()
     }
