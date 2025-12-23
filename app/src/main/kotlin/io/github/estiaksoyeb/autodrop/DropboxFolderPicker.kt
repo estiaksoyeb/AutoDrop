@@ -1,6 +1,7 @@
 package io.github.estiaksoyeb.autodrop
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -47,14 +49,16 @@ import androidx.compose.material3.TextField
 @Composable
 fun DropboxFolderPicker(
     accessToken: String,
+    initialPath: String = "",
     onFolderSelected: (DropboxItem) -> Unit,
     onCancel: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val client = remember { DropboxClient(accessToken) }
     
-    // State
-    val currentPath = remember { mutableStateOf("") }
+    // State - Normalize initialPath: "/" -> ""
+    val normalizedInitial = if (initialPath == "/") "" else initialPath
+    val currentPath = remember { mutableStateOf(normalizedInitial) }
     val items = remember { mutableStateOf<List<DropboxItem>>(emptyList()) }
     val isLoading = remember { mutableStateOf(false) }
     
@@ -75,6 +79,14 @@ fun DropboxFolderPicker(
     LaunchedEffect(currentPath.value) {
         loadItems()
     }
+    
+    // Ensure we sync with initialPath if it changes (though usually this composable is recreated)
+    LaunchedEffect(initialPath) {
+         val normalized = if (initialPath == "/") "" else initialPath
+         if (currentPath.value != normalized) {
+             currentPath.value = normalized
+         }
+    }
 
     Scaffold(
         topBar = {
@@ -94,12 +106,39 @@ fun DropboxFolderPicker(
                             Icon(Icons.Default.ArrowBack, contentDescription = "Cancel")
                         }
                     }
+                },
+                actions = {
+                    IconButton(onClick = { showCreateDialog.value = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Create Folder")
+                    }
                 }
             )
         },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog.value = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Create Folder")
+        bottomBar = {
+            Surface(
+                shadowElevation = 8.dp,
+                tonalElevation = 8.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            onFolderSelected(DropboxItem(
+                                name = if(currentPath.value.isEmpty()) "Root" else currentPath.value.substringAfterLast("/"),
+                                pathDisplay = if(currentPath.value.isEmpty()) "/" else currentPath.value,
+                                pathLower = currentPath.value.lowercase(),
+                                isFolder = true
+                            ))
+                        }
+                    ) {
+                        Text(if(currentPath.value.isEmpty()) "Select Root" else "Select This Folder")
+                    }
+                }
             }
         }
     ) { padding ->
@@ -108,31 +147,18 @@ fun DropboxFolderPicker(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            
-            // Current Path Header & Select Button
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // Path Viewer
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant, 
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = "Current: ${if(currentPath.value.isEmpty()) "Root" else currentPath.value}", style = MaterialTheme.typography.bodySmall)
-                }
-                Button(onClick = {
-                    onFolderSelected(DropboxItem(
-                        name = if(currentPath.value.isEmpty()) "Root" else currentPath.value.substringAfterLast("/"),
-                        pathDisplay = currentPath.value,
-                        pathLower = currentPath.value.lowercase(),
-                        isFolder = true
-                    ))
-                }) {
-                    Text("Select This")
-                }
+                Text(
+                    text = if (currentPath.value.isEmpty()) "Path: /" else "Path: ${currentPath.value}",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
-
-            Divider()
-
+            
             if (isLoading.value) {
                 Text("Loading...", modifier = Modifier.padding(16.dp))
             } else {

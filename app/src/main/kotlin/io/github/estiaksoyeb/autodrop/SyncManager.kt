@@ -39,7 +39,6 @@ class SyncManager(private val context: Context, private val authManager: AuthMan
                 if (!pair.isEnabled) continue
                 
                 _syncStatus.value = "Syncing ${pair.dropboxPath}..."
-                var pairUploaded = 0
                 
                 try {
                     val localFolder = DocumentFile.fromTreeUri(context, Uri.parse(pair.localUri))
@@ -48,29 +47,19 @@ class SyncManager(private val context: Context, private val authManager: AuthMan
                          continue
                     }
 
-                    val files = localFolder.listFiles()
-                    
-                    for (file in files) {
-                        if (file.isFile) {
-                            val fileName = file.name ?: continue
-                            val remotePath = if (pair.dropboxPath == "/" || pair.dropboxPath.isEmpty()) "/$fileName" else "${pair.dropboxPath}/$fileName"
-                            
-                            try {
-                                context.contentResolver.openInputStream(file.uri)?.use { inputStream ->
-                                    if (client.uploadFile(remotePath, inputStream)) {
-                                        totalUploaded++
-                                        pairUploaded++
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
+                    // Use Recursive Sync
+                    val pairUploaded = SyncUtils.syncFolderRecursively(
+                        context = context,
+                        client = client,
+                        localFolder = localFolder,
+                        remoteBasePath = pair.dropboxPath,
+                        excludedPaths = pair.excludedPaths,
+                        onUpload = { totalUploaded++ }
+                    )
+
                     if (pairUploaded > 0) {
-                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Success", details = "Uploaded $pairUploaded files to ${pair.dropboxPath}"))
+                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Success", details = "Uploaded $pairUploaded files"))
                     } else {
-                        // Optional: Log 'No changes' or skip
                          repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Completed", details = "No new files to upload for ${pair.dropboxPath}"))
                     }
                 } catch (e: Exception) {

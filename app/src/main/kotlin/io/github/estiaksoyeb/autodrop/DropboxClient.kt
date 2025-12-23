@@ -43,12 +43,16 @@ class DropboxClient(private val accessToken: String) {
                         val name = entry.getString("name")
                         val pathDisplay = entry.optString("path_display", name)
                         val pathLower = entry.optString("path_lower", name.lowercase())
+                        val contentHash = entry.optString("content_hash", null)
+                        val size = entry.optLong("size", 0)
 
                         items.add(DropboxItem(
                             name = name,
                             pathDisplay = pathDisplay,
                             pathLower = pathLower,
-                            isFolder = tag == "folder"
+                            isFolder = tag == "folder",
+                            contentHash = contentHash,
+                            size = size
                         ))
                     }
                 } else {
@@ -67,8 +71,8 @@ class DropboxClient(private val accessToken: String) {
                 // Dropbox upload API argument
                 val jsonArg = JSONObject()
                 jsonArg.put("path", path)
-                jsonArg.put("mode", "add") // "add", "overwrite", "update"
-                jsonArg.put("autorename", true)
+                jsonArg.put("mode", "overwrite") // "add", "overwrite", "update"
+                jsonArg.put("autorename", false)
                 jsonArg.put("mute", false)
                 jsonArg.put("strict_conflict", false)
 

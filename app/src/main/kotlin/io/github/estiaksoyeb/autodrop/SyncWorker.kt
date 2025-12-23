@@ -41,26 +41,16 @@ class SyncWorker(
                          continue
                     }
 
-                    val files = localFolder.listFiles()
-                    var uploadedCount = 0
-                    
-                    for (file in files) {
-                        if (file.isFile) {
-                            val fileName = file.name ?: continue
-                            // Use dropboxPath from the pair
-                            val remotePath = if (pair.dropboxPath == "/" || pair.dropboxPath.isEmpty()) "/$fileName" else "${pair.dropboxPath}/$fileName"
-                            
-                            try {
-                                applicationContext.contentResolver.openInputStream(file.uri)?.use { inputStream ->
-                                    if (client.uploadFile(remotePath, inputStream)) {
-                                        uploadedCount++
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
+                    // Recursive Sync via Utils
+                    val uploadedCount = SyncUtils.syncFolderRecursively(
+                        context = applicationContext,
+                        client = client,
+                        localFolder = localFolder,
+                        remoteBasePath = pair.dropboxPath,
+                        excludedPaths = pair.excludedPaths,
+                        onUpload = { }
+                    )
+
                     repo.updateSyncStatus(pair.id, "Success: $uploadedCount uploaded")
                     if (uploadedCount > 0) {
                         repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Auto-Sync Success", details = "Uploaded $uploadedCount files"))

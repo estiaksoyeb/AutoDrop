@@ -6,12 +6,20 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.util.UUID
 
+enum class SyncMethod {
+    UPLOAD_ONLY,
+    DOWNLOAD_ONLY,
+    TWO_WAY
+}
+
 data class SyncPair(
     val id: String = UUID.randomUUID().toString(),
     val localUri: String,
     val dropboxPath: String,
     val lastSyncStatus: String = "Idle",
-    val isEnabled: Boolean = true
+    val isEnabled: Boolean = true,
+    val syncMethod: SyncMethod = SyncMethod.UPLOAD_ONLY,
+    val excludedPaths: List<String> = emptyList()
 )
 
 data class SyncHistoryLog(

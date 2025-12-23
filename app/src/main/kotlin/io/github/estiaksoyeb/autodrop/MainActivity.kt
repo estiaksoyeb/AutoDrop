@@ -2,38 +2,12 @@ package io.github.estiaksoyeb.autodrop
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import androidx.core.view.WindowCompat
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
-
-import androidx.compose.runtime.collectAsState
-import android.content.Context
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
-import java.util.concurrent.TimeUnit
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -42,21 +16,22 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     
@@ -70,12 +45,10 @@ class MainActivity : ComponentActivity() {
     private var syncPairsState = mutableStateOf<List<SyncPair>>(emptyList())
     private var historyLogsState = mutableStateOf<List<SyncHistoryLog>>(emptyList())
     
-    // Navigation State
-    private var currentScreen = mutableStateOf("home") // "home" or "history"
-    
-    // Add Flow State
-    private var isAddingPair = mutableStateOf(false)
-    private var tempDropboxPath = mutableStateOf<String?>(null)
+    // Navigation & Draft State
+    private var currentScreen = mutableStateOf("home") // "home", "history", "setup"
+    private var draftSyncPair = mutableStateOf<SyncPair?>(null)
+    private var isPickingRemote = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,44 +81,58 @@ class MainActivity : ComponentActivity() {
             
             // Local Folder Picker Launcher
             val localFolderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+                contract = ActivityResultContracts.OpenDocumentTree()
             ) { uri ->
                 if (uri != null) {
                     val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     context.contentResolver.takePersistableUriPermission(uri, takeFlags)
                     
-                    val dropboxPath = tempDropboxPath.value
-                    if (dropboxPath != null) {
-                        val newPair = SyncPair(
-                            localUri = uri.toString(),
-                            dropboxPath = dropboxPath
-                        )
-                        syncRepository.addSyncPair(newPair)
-                        loadData() // Refresh list
-                        scheduleBackgroundSync()
+                    // Update Draft
+                    draftSyncPair.value?.let { currentDraft ->
+                        draftSyncPair.value = currentDraft.copy(localUri = uri.toString())
                     }
-                    
-                    // Reset State
-                    isAddingPair.value = false
-                    tempDropboxPath.value = null
-                } else {
-                    // Cancelled local picker
-                     isAddingPair.value = false
-                     tempDropboxPath.value = null
                 }
             }
 
-            if (isAddingPair.value && isLoggedInState.value) {
+            // Main UI Switcher
+            if (isPickingRemote.value && isLoggedInState.value) {
                 DropboxFolderPicker(
                     accessToken = authManager.getAccessToken() ?: "",
+                    initialPath = draftSyncPair.value?.dropboxPath ?: "",
                     onFolderSelected = { folder ->
-                        tempDropboxPath.value = folder.pathDisplay
-                        localFolderLauncher.launch(null)
+                         draftSyncPair.value?.let { currentDraft ->
+                            draftSyncPair.value = currentDraft.copy(dropboxPath = folder.pathDisplay)
+                        }
+                        isPickingRemote.value = false
                     },
                     onCancel = { 
-                        isAddingPair.value = false 
-                        tempDropboxPath.value = null
+                        isPickingRemote.value = false 
+                    }
+                )
+            } else if (currentScreen.value == "setup" && draftSyncPair.value != null) {
+                SyncSetupScreen(
+                    draftPair = draftSyncPair.value!!,
+                    onUpdateDraft = { updated -> draftSyncPair.value = updated },
+                    onPickLocal = { localFolderLauncher.launch(null) },
+                    onPickRemote = { isPickingRemote.value = true },
+                    onSave = {
+                        draftSyncPair.value?.let { pair ->
+                            // Update or Add
+                            // If ID exists in list, update (remove old, add new). But wait, ID is UUID.
+                            // We need to check if we are editing.
+                            // Simpler: Remove by ID first (safe if not exists), then add.
+                            syncRepository.removeSyncPair(pair.id)
+                            syncRepository.addSyncPair(pair)
+                            loadData()
+                            scheduleBackgroundSync()
+                        }
+                        draftSyncPair.value = null
+                        currentScreen.value = "home"
+                    },
+                    onCancel = {
+                        draftSyncPair.value = null
+                        currentScreen.value = "home"
                     }
                 )
             } else {
@@ -166,7 +153,14 @@ class MainActivity : ComponentActivity() {
                         loadData()
                         WorkManager.getInstance(this).cancelUniqueWork("AutoDropSync")
                     },
-                    onAddPair = { isAddingPair.value = true },
+                    onAddPair = { 
+                        draftSyncPair.value = SyncPair(localUri = "", dropboxPath = "")
+                        currentScreen.value = "setup"
+                    },
+                    onEditPair = { pair ->
+                        draftSyncPair.value = pair
+                        currentScreen.value = "setup"
+                    },
                     onDeletePair = { id ->
                         syncRepository.removeSyncPair(id)
                         loadData()
@@ -249,6 +243,7 @@ fun MainScreen(
     onConnect: () -> Unit,
     onLogout: () -> Unit,
     onAddPair: () -> Unit,
+    onEditPair: (SyncPair) -> Unit,
     onDeletePair: (String) -> Unit,
     onSyncAll: () -> Unit,
     onClearHistory: () -> Unit,
@@ -309,7 +304,7 @@ fun MainScreen(
                 }
             } else {
                 if (currentScreen == "home") {
-                    HomeScreen(syncPairs, globalSyncStatus, onSyncAll, onDeletePair, onLogout)
+                    HomeScreen(syncPairs, globalSyncStatus, onSyncAll, onEditPair, onDeletePair, onLogout)
                 } else {
                     HistoryScreen(historyLogs)
                 }
@@ -323,6 +318,7 @@ fun HomeScreen(
     syncPairs: List<SyncPair>,
     globalSyncStatus: String,
     onSyncAll: () -> Unit,
+    onEditPair: (SyncPair) -> Unit,
     onDeletePair: (String) -> Unit,
     onLogout: () -> Unit
 ) {
@@ -347,7 +343,7 @@ fun HomeScreen(
             modifier = Modifier.weight(1f).fillMaxWidth()
         ) {
             items(syncPairs) { pair ->
-                SyncPairItem(pair, onDelete = { onDeletePair(pair.id) })
+                SyncPairItem(pair, onClick = { onEditPair(pair) }, onDelete = { onDeletePair(pair.id) })
             }
             if (syncPairs.isEmpty()) {
                 item {
@@ -407,7 +403,7 @@ fun HistoryLogItem(log: SyncHistoryLog) {
 }
 
 @Composable
-fun SyncPairItem(pair: SyncPair, onDelete: () -> Unit) {
+fun SyncPairItem(pair: SyncPair, onClick: () -> Unit, onDelete: () -> Unit) {
     
     fun getFriendlyLocal(uri: String): String {
         val path = android.net.Uri.parse(uri).path ?: return uri
@@ -418,7 +414,9 @@ fun SyncPairItem(pair: SyncPair, onDelete: () -> Unit) {
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clickable { onClick() },
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
     ) {
@@ -431,6 +429,7 @@ fun SyncPairItem(pair: SyncPair, onDelete: () -> Unit) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(text = "Local: ${getFriendlyLocal(pair.localUri)}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                 Spacer(modifier = Modifier.height(4.dp))
+                Text(text = "Method: ${pair.syncMethod}", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 Text(text = "Last: ${pair.lastSyncStatus}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF1976D2))
             }
             IconButton(onClick = onDelete) {

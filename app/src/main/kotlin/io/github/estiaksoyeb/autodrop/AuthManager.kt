@@ -18,7 +18,7 @@ import java.security.SecureRandom
 class AuthManager(private val context: Context) {
 
     companion object {
-        const val APP_KEY = "6gzu6iac2g7ud1q" // Your Dropbox App Key
+        const val APP_KEY = "y7b4j447alz4qpv" // Your Dropbox App Key
         const val REDIRECT_URI = "autodrop://oauth2redirect"
         private const val PREFS_FILENAME = "secure_prefs"
         private const val KEY_ACCESS_TOKEN = "access_token"
