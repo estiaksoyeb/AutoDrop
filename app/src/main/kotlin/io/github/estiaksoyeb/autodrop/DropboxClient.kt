@@ -119,4 +119,92 @@ class DropboxClient(private val accessToken: String) {
             }
         }
     }
+
+    suspend fun getCurrentAccountDetails(): JSONObject? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://api.dropboxapi.com/2/users/get_current_account")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .post("".toRequestBody(null))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    return@withContext JSONObject(response.body?.string() ?: "")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            null
+        }
+    }
+
+    suspend fun getSpaceUsage(): JSONObject? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://api.dropboxapi.com/2/users/get_space_usage")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .post("".toRequestBody(null))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    return@withContext JSONObject(response.body?.string() ?: "")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            null
+        }
+    }
+
+    suspend fun deleteFile(path: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val jsonBody = JSONObject()
+                jsonBody.put("path", path)
+
+                val request = Request.Builder()
+                    .url("https://api.dropboxapi.com/2/files/delete_v2")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .post(jsonBody.toString().toRequestBody(jsonMediaType))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                response.isSuccessful
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
+
+    suspend fun downloadFile(path: String, outputStream: java.io.OutputStream): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val jsonArg = JSONObject()
+                jsonArg.put("path", path)
+
+                val request = Request.Builder()
+                    .url("https://content.dropboxapi.com/2/files/download")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .addHeader("Dropbox-API-Arg", jsonArg.toString())
+                    .post("".toRequestBody(null)) // Empty body
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    response.body?.byteStream()?.use { input ->
+                        input.copyTo(outputStream)
+                    }
+                    return@withContext true
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            false
+        }
+    }
 }

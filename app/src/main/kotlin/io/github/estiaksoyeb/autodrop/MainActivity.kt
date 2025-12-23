@@ -11,16 +11,20 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
@@ -28,6 +32,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,11 +47,15 @@ class MainActivity : ComponentActivity() {
     // State
     private var isLoggedInState = mutableStateOf(false)
     private var userNameState = mutableStateOf("")
+    private var userEmailState = mutableStateOf("")
+    private var storageTotalState = mutableLongStateOf(0L)
+    private var storageUsedState = mutableLongStateOf(0L)
+    
     private var syncPairsState = mutableStateOf<List<SyncPair>>(emptyList())
     private var historyLogsState = mutableStateOf<List<SyncHistoryLog>>(emptyList())
     
     // Navigation & Draft State
-    private var currentScreen = mutableStateOf("home") // "home", "history", "setup"
+    private var currentScreen = mutableStateOf("home") // "home", "history", "setup", "settings", "accounts"
     private var draftSyncPair = mutableStateOf<SyncPair?>(null)
     private var isPickingRemote = mutableStateOf(false)
 
@@ -118,10 +127,6 @@ class MainActivity : ComponentActivity() {
                     onPickRemote = { isPickingRemote.value = true },
                     onSave = {
                         draftSyncPair.value?.let { pair ->
-                            // Update or Add
-                            // If ID exists in list, update (remove old, add new). But wait, ID is UUID.
-                            // We need to check if we are editing.
-                            // Simpler: Remove by ID first (safe if not exists), then add.
                             syncRepository.removeSyncPair(pair.id)
                             syncRepository.addSyncPair(pair)
                             loadData()
@@ -140,6 +145,9 @@ class MainActivity : ComponentActivity() {
                     currentScreen = currentScreen.value,
                     isLoggedIn = isLoggedInState.value,
                     userName = userNameState.value,
+                    userEmail = userEmailState.value,
+                    storageTotal = storageTotalState.longValue,
+                    storageUsed = storageUsedState.longValue,
                     syncPairs = syncPairsState.value,
                     historyLogs = historyLogsState.value,
                     globalSyncStatus = syncStatus.value,
@@ -149,9 +157,13 @@ class MainActivity : ComponentActivity() {
                         authManager.logout() 
                         isLoggedInState.value = false
                         userNameState.value = ""
+                        userEmailState.value = ""
+                        storageTotalState.longValue = 0L
+                        storageUsedState.longValue = 0L
                         syncRepository.clearAll()
                         loadData()
                         WorkManager.getInstance(this).cancelUniqueWork("AutoDropSync")
+                        currentScreen.value = "home"
                     },
                     onAddPair = { 
                         draftSyncPair.value = SyncPair(localUri = "", dropboxPath = "")
@@ -222,9 +234,22 @@ class MainActivity : ComponentActivity() {
 
     private fun fetchUserInfo() {
         lifecycleScope.launch {
-            val name = authManager.getCurrentAccount()
-            if (name != null) {
-                userNameState.value = name
+            val token = authManager.getAccessToken() ?: return@launch
+            val client = DropboxClient(token)
+            
+            val accountDetails = client.getCurrentAccountDetails()
+            if (accountDetails != null) {
+                userNameState.value = accountDetails.getJSONObject("name").getString("display_name")
+                userEmailState.value = accountDetails.getString("email")
+            }
+            
+            val spaceUsage = client.getSpaceUsage()
+            if (spaceUsage != null) {
+                storageUsedState.longValue = spaceUsage.getLong("used")
+                val allocation = spaceUsage.getJSONObject("allocation")
+                if (allocation.getString(".tag") == "individual") {
+                    storageTotalState.longValue = allocation.getLong("allocated")
+                }
             }
         }
     }
@@ -236,6 +261,9 @@ fun MainScreen(
     currentScreen: String,
     isLoggedIn: Boolean,
     userName: String,
+    userEmail: String,
+    storageTotal: Long,
+    storageUsed: Long,
     syncPairs: List<SyncPair>,
     historyLogs: List<SyncHistoryLog>,
     globalSyncStatus: String,
@@ -252,8 +280,28 @@ fun MainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isLoggedIn) "AutoDrop: $userName" else "AutoDrop") },
+                title = { 
+                    when(currentScreen) {
+                        "settings" -> Text("Settings")
+                        "accounts" -> Text("Account")
+                        else -> Text("AutoDrop") 
+                    }
+                },
+                navigationIcon = {
+                    if (currentScreen == "settings" || currentScreen == "accounts") {
+                        IconButton(onClick = { 
+                            if (currentScreen == "accounts") onNavigate("settings") else onNavigate("home") 
+                        }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
                 actions = {
+                    if (currentScreen == "home" && isLoggedIn) {
+                        IconButton(onClick = { onNavigate("settings") }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
+                    }
                     if (currentScreen == "history" && isLoggedIn) {
                         IconButton(onClick = onRefreshHistory) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
@@ -266,7 +314,7 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            if (isLoggedIn) {
+            if (isLoggedIn && (currentScreen == "home" || currentScreen == "history")) {
                 NavigationBar {
                     NavigationBarItem(
                         icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
@@ -296,17 +344,111 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(Color.White),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.TopCenter
         ) {
             if (!isLoggedIn) {
-                Button(onClick = onConnect) {
-                    Text("Connect Dropbox")
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Button(onClick = onConnect) {
+                        Text("Connect Dropbox")
+                    }
                 }
             } else {
-                if (currentScreen == "home") {
-                    HomeScreen(syncPairs, globalSyncStatus, onSyncAll, onEditPair, onDeletePair, onLogout)
-                } else {
-                    HistoryScreen(historyLogs)
+                when (currentScreen) {
+                    "home" -> HomeScreen(syncPairs, globalSyncStatus, onSyncAll, onEditPair, onDeletePair)
+                    "history" -> HistoryScreen(historyLogs)
+                    "settings" -> SettingsScreen(onNavigate)
+                    "accounts" -> AccountsScreen(userName, userEmail, storageUsed, storageTotal, onLogout)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(onNavigate: (String) -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { onNavigate("accounts") },
+            elevation = CardDefaults.cardElevation(2.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
+        ) {
+            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.AccountCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(16.dp))
+                Text("Accounts", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
+@Composable
+fun AccountsScreen(
+    userName: String, 
+    userEmail: String, 
+    used: Long, 
+    total: Long, 
+    onLogout: () -> Unit
+) {
+    fun formatSize(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val exp = (Math.log(bytes.toDouble()) / Math.log(1024.0)).toInt()
+        val pre = "KMGTPE"[exp - 1]
+        return String.format("%.1f %sB", bytes / Math.pow(1024.0, exp.toDouble()), pre)
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(4.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.AccountCircle, 
+                        contentDescription = null, 
+                        modifier = Modifier.size(50.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text(userName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(userEmail, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text("Storage Usage", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                LinearProgressIndicator(
+                    progress = progress,
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color(0xFFEEEEEE)
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${formatSize(used)} used", style = MaterialTheme.typography.bodySmall)
+                    Text("${formatSize(total)} total", style = MaterialTheme.typography.bodySmall)
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Button(
+                    onClick = onLogout,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                ) {
+                    Text("Disconnect Account", color = Color.White)
                 }
             }
         }
@@ -319,8 +461,7 @@ fun HomeScreen(
     globalSyncStatus: String,
     onSyncAll: () -> Unit,
     onEditPair: (SyncPair) -> Unit,
-    onDeletePair: (String) -> Unit,
-    onLogout: () -> Unit
+    onDeletePair: (String) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Status Bar
@@ -352,13 +493,6 @@ fun HomeScreen(
                     }
                 }
             }
-        }
-        
-        Button(
-            onClick = onLogout, 
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp)
-        ) {
-            Text("Disconnect Account")
         }
     }
 }

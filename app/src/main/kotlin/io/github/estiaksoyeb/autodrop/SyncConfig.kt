@@ -9,6 +9,8 @@ import java.util.UUID
 enum class SyncMethod {
     UPLOAD_ONLY,
     DOWNLOAD_ONLY,
+    MIRROR_UPLOAD,
+    MIRROR_DOWNLOAD,
     TWO_WAY
 }
 

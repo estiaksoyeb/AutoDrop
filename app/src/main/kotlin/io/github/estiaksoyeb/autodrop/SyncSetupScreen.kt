@@ -197,6 +197,8 @@ fun SyncSetupScreen(
                     value = when (draftPair.syncMethod) {
                         SyncMethod.UPLOAD_ONLY -> "Upload Only (Local -> Cloud)"
                         SyncMethod.DOWNLOAD_ONLY -> "Download Only (Cloud -> Local)"
+                        SyncMethod.MIRROR_UPLOAD -> "Mirror Upload (Destructive)"
+                        SyncMethod.MIRROR_DOWNLOAD -> "Mirror Download (Destructive)"
                         SyncMethod.TWO_WAY -> "Two Way Sync"
                     },
                     onValueChange = {},
@@ -224,6 +226,20 @@ fun SyncSetupScreen(
                         text = { Text("Download Only (Cloud -> Local)") },
                         onClick = {
                             onUpdateDraft(draftPair.copy(syncMethod = SyncMethod.DOWNLOAD_ONLY))
+                            isMethodExpanded = false
+                        }
+                    )
+                     DropdownMenuItem(
+                        text = { Text("Mirror Upload (Destructive)") },
+                        onClick = {
+                            onUpdateDraft(draftPair.copy(syncMethod = SyncMethod.MIRROR_UPLOAD))
+                            isMethodExpanded = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Mirror Download (Destructive)") },
+                        onClick = {
+                            onUpdateDraft(draftPair.copy(syncMethod = SyncMethod.MIRROR_DOWNLOAD))
                             isMethodExpanded = false
                         }
                     )

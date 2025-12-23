@@ -42,18 +42,16 @@ class SyncWorker(
                     }
 
                     // Recursive Sync via Utils
-                    val uploadedCount = SyncUtils.syncFolderRecursively(
+                    val changeCount = SyncUtils.performSync(
                         context = applicationContext,
+                        pair = pair,
                         client = client,
-                        localFolder = localFolder,
-                        remoteBasePath = pair.dropboxPath,
-                        excludedPaths = pair.excludedPaths,
-                        onUpload = { }
+                        onProgress = { msg -> repo.updateSyncStatus(pair.id, msg) }
                     )
 
-                    repo.updateSyncStatus(pair.id, "Success: $uploadedCount uploaded")
-                    if (uploadedCount > 0) {
-                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Auto-Sync Success", details = "Uploaded $uploadedCount files"))
+                    repo.updateSyncStatus(pair.id, "Success: $changeCount changes")
+                    if (changeCount > 0) {
+                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Auto-Sync Success", details = "Processed $changeCount changes"))
                     }
                 } catch (e: Exception) {
                     repo.updateSyncStatus(pair.id, "Error: ${e.message}")

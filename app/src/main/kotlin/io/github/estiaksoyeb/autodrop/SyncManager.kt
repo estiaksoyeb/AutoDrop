@@ -47,28 +47,27 @@ class SyncManager(private val context: Context, private val authManager: AuthMan
                          continue
                     }
 
-                    // Use Recursive Sync
-                    val pairUploaded = SyncUtils.syncFolderRecursively(
+                    // Use performSync
+                    val changeCount = SyncUtils.performSync(
                         context = context,
+                        pair = pair,
                         client = client,
-                        localFolder = localFolder,
-                        remoteBasePath = pair.dropboxPath,
-                        excludedPaths = pair.excludedPaths,
-                        onUpload = { totalUploaded++ }
+                        onProgress = { msg -> _syncStatus.value = msg }
                     )
 
-                    if (pairUploaded > 0) {
-                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Success", details = "Uploaded $pairUploaded files"))
+                    if (changeCount > 0) {
+                        repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Success", details = "Processed $changeCount changes"))
+                        totalUploaded += changeCount
                     } else {
-                         repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Completed", details = "No new files to upload for ${pair.dropboxPath}"))
+                         repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Completed", details = "No changes for ${pair.dropboxPath}"))
                     }
                 } catch (e: Exception) {
                     repo.addLog(SyncHistoryLog(pairId = pair.id, summary = "Sync Error", details = e.message ?: "Unknown error"))
                 }
             }
             
-            _syncStatus.value = "Complete. Uploaded $totalUploaded files total."
-            repo.addLog(SyncHistoryLog(pairId = "GLOBAL", summary = "Manual Sync Complete", details = "Total uploaded: $totalUploaded"))
+            _syncStatus.value = "Complete. Processed $totalUploaded items."
+            repo.addLog(SyncHistoryLog(pairId = "GLOBAL", summary = "Manual Sync Complete", details = "Total items processed: $totalUploaded"))
         }
     }
 }
