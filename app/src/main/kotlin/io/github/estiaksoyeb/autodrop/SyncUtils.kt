@@ -15,6 +15,21 @@ data class FileSnapshot(
     val hash: String?
 )
 
+data class SyncStats(
+    var uploaded: Int = 0,
+    var downloaded: Int = 0,
+    var deleted: Int = 0,
+    var errors: Int = 0
+) {
+    operator fun plus(other: SyncStats) = SyncStats(
+        uploaded + other.uploaded,
+        downloaded + other.downloaded,
+        deleted + other.deleted,
+        errors + other.errors
+    )
+    fun totalChanges() = uploaded + downloaded + deleted
+}
+
 object SyncUtils {
 
     suspend fun performSync(
@@ -31,7 +46,7 @@ object SyncUtils {
             return 0
         }
         
-        val count = when (pair.syncMethod) {
+        val stats = when (pair.syncMethod) {
             SyncMethod.UPLOAD_ONLY -> syncUpload(context, client, localFolder, pair.dropboxPath, pair.excludedPaths, isMirror = false, onLog)
             SyncMethod.MIRROR_UPLOAD -> syncUpload(context, client, localFolder, pair.dropboxPath, pair.excludedPaths, isMirror = true, onLog)
             SyncMethod.DOWNLOAD_ONLY -> syncDownload(context, client, localFolder, pair.dropboxPath, pair.excludedPaths, isMirror = false, onLog)
@@ -39,8 +54,23 @@ object SyncUtils {
             SyncMethod.TWO_WAY -> syncTwoWay(context, pair.id, client, localFolder, pair.dropboxPath, pair.excludedPaths, onLog)
         }
         
+        val total = stats.totalChanges()
+        if (total > 0) {
+            val msg = buildString {
+                append("$total files sync done (")
+                if (stats.uploaded > 0) append("Up: ${stats.uploaded}, ")
+                if (stats.downloaded > 0) append("Down: ${stats.downloaded}, ")
+                if (stats.deleted > 0) append("Del: ${stats.deleted}")
+                append(")")
+            }.replace(", )", ")")
+            
+            onLog(SyncHistoryLog(message = msg, type = LogType.INFO))
+        } else if (stats.errors == 0) {
+            onLog(SyncHistoryLog(message = "No changes detected.", type = LogType.INFO))
+        }
+
         onLog(SyncHistoryLog(message = "=== Sync completed ===", type = LogType.END))
-        return count
+        return total
     }
 
     // 1. Upload (Local -> Remote)
@@ -52,8 +82,8 @@ object SyncUtils {
         excludedPaths: List<String>,
         isMirror: Boolean,
         onLog: (SyncHistoryLog) -> Unit
-    ): Int {
-        var count = 0
+    ): SyncStats {
+        var stats = SyncStats()
         val localFiles = localFolder.listFiles()
         val remoteItems = client.listFolder(remoteBasePath)
         val remoteMap = remoteItems.associateBy { it.name }
@@ -67,8 +97,7 @@ object SyncUtils {
             val remotePath = joinPath(remoteBasePath, name)
             
             if (file.isDirectory) {
-                count += syncUpload(context, client, file, remotePath, excludedPaths, isMirror, onLog)
-                onLog(SyncHistoryLog(message = "Folder sync completed: $name", type = LogType.INFO))
+                stats += syncUpload(context, client, file, remotePath, excludedPaths, isMirror, onLog)
             } else {
                 val shouldUpload = if (remoteItem != null && remoteItem.contentHash != null) {
                     val localHash = calculateDropboxHash(context, file.uri)
@@ -78,9 +107,11 @@ object SyncUtils {
                 }
                 
                 if (shouldUpload) {
-                    onLog(SyncHistoryLog(message = "[UPLOAD] Local -> Remote: $name", type = LogType.INFO))
-                    if (uploadFile(context, client, file.uri, remotePath)) count++
-                    else onLog(SyncHistoryLog(message = "ERROR: Failed to upload $name", type = LogType.ERROR))
+                    if (uploadFile(context, client, file.uri, remotePath)) stats.uploaded++
+                    else {
+                        onLog(SyncHistoryLog(message = "ERROR: Failed to upload $name", type = LogType.ERROR))
+                        stats.errors++
+                    }
                 }
             }
         }
@@ -92,13 +123,15 @@ object SyncUtils {
                 if (isExcluded(remoteItem.name, excludedPaths)) continue
                 
                 if (!localNames.contains(remoteItem.name)) {
-                    onLog(SyncHistoryLog(message = "[DELETE] Remote: ${remoteItem.name}", type = LogType.INFO))
-                    if (client.deleteFile(remoteItem.pathDisplay)) count++
-                    else onLog(SyncHistoryLog(message = "ERROR: Failed to delete remote ${remoteItem.name}", type = LogType.ERROR))
+                    if (client.deleteFile(remoteItem.pathDisplay)) stats.deleted++
+                    else {
+                        onLog(SyncHistoryLog(message = "ERROR: Failed to delete remote ${remoteItem.name}", type = LogType.ERROR))
+                        stats.errors++
+                    }
                 }
             }
         }
-        return count
+        return stats
     }
 
     // 2. Download (Remote -> Local)
@@ -110,8 +143,8 @@ object SyncUtils {
         excludedPaths: List<String>,
         isMirror: Boolean,
         onLog: (SyncHistoryLog) -> Unit
-    ): Int {
-        var count = 0
+    ): SyncStats {
+        var stats = SyncStats()
         val remoteItems = client.listFolder(remoteBasePath)
         val localFiles = localFolder.listFiles()
         val localMap = localFiles.filter { it.name != null }.associateBy { it.name!! }
@@ -125,8 +158,7 @@ object SyncUtils {
             if (remoteItem.isFolder) {
                 val targetFolder = localFile ?: localFolder.createDirectory(remoteItem.name)
                 if (targetFolder != null && targetFolder.isDirectory) {
-                    count += syncDownload(context, client, targetFolder, remoteItem.pathDisplay, excludedPaths, isMirror, onLog)
-                    onLog(SyncHistoryLog(message = "Folder sync completed: ${remoteItem.name}", type = LogType.INFO))
+                    stats += syncDownload(context, client, targetFolder, remoteItem.pathDisplay, excludedPaths, isMirror, onLog)
                 }
             } else {
                 val shouldDownload = if (localFile != null) {
@@ -137,13 +169,16 @@ object SyncUtils {
                 }
                 
                 if (shouldDownload) {
-                    onLog(SyncHistoryLog(message = "[DOWNLOAD] Remote -> Local: ${remoteItem.name}", type = LogType.INFO))
                     val destFile = localFile ?: localFolder.createFile("application/octet-stream", remoteItem.name)
                     if (destFile != null) {
-                        if (downloadFile(context, client, remoteItem.pathDisplay, destFile)) count++
-                        else onLog(SyncHistoryLog(message = "ERROR: Failed to download ${remoteItem.name}", type = LogType.ERROR))
+                        if (downloadFile(context, client, remoteItem.pathDisplay, destFile)) stats.downloaded++
+                        else {
+                            onLog(SyncHistoryLog(message = "ERROR: Failed to download ${remoteItem.name}", type = LogType.ERROR))
+                            stats.errors++
+                        }
                     } else {
                          onLog(SyncHistoryLog(message = "ERROR: Failed to create local file ${remoteItem.name}", type = LogType.ERROR))
+                         stats.errors++
                     }
                 }
             }
@@ -157,13 +192,15 @@ object SyncUtils {
                 if (isExcluded(name, excludedPaths)) continue
                 
                 if (!remoteNames.contains(name)) {
-                    onLog(SyncHistoryLog(message = "[DELETE] Local: $name", type = LogType.INFO))
-                    if (file.delete()) count++
-                    else onLog(SyncHistoryLog(message = "ERROR: Failed to delete local $name", type = LogType.ERROR))
+                    if (file.delete()) stats.deleted++
+                    else {
+                        onLog(SyncHistoryLog(message = "ERROR: Failed to delete local $name", type = LogType.ERROR))
+                        stats.errors++
+                    }
                 }
             }
         }
-        return count
+        return stats
     }
 
     // 3. Two-Way Sync
@@ -175,7 +212,7 @@ object SyncUtils {
         remoteBasePath: String,
         excludedPaths: List<String>,
         onLog: (SyncHistoryLog) -> Unit
-    ): Int {
+    ): SyncStats {
         val snapshotFile = File(context.filesDir, "snapshot_$pairId.json")
         val gson = Gson()
         val type = object : TypeToken<Map<String, FileSnapshot>>() {}.type
@@ -187,13 +224,13 @@ object SyncUtils {
         
         val newSnapshot = mutableMapOf<String, FileSnapshot>()
         
-        val count = syncTwoWayRecursive(
+        val stats = syncTwoWayRecursive(
             context, client, localFolder, remoteBasePath, "", 
             excludedPaths, oldSnapshot, newSnapshot, onLog
         )
         
         snapshotFile.writeText(gson.toJson(newSnapshot))
-        return count
+        return stats
     }
 
     private suspend fun syncTwoWayRecursive(
@@ -206,8 +243,8 @@ object SyncUtils {
         oldSnapshot: Map<String, FileSnapshot>,
         newSnapshot: MutableMap<String, FileSnapshot>,
         onLog: (SyncHistoryLog) -> Unit
-    ): Int {
-        var count = 0
+    ): SyncStats {
+        var stats = SyncStats()
         
         val localFiles = localFolder.listFiles()
         val localMap = localFiles.filter { it.name != null }.associateBy { it.name!! }
@@ -231,15 +268,12 @@ object SyncUtils {
                 if (remoteItem != null && remoteItem.isFolder && localFile == null) {
                      val created = localFolder.createDirectory(name)
                      if (created != null) {
-                         count += syncTwoWayRecursive(context, client, created, remoteItem.pathDisplay, itemPath, excludedPaths, oldSnapshot, newSnapshot, onLog)
-                         onLog(SyncHistoryLog(message = "Folder sync completed: $name", type = LogType.INFO))
+                         stats += syncTwoWayRecursive(context, client, created, remoteItem.pathDisplay, itemPath, excludedPaths, oldSnapshot, newSnapshot, onLog)
                      }
                 } else if (localFile != null && localFile.isDirectory && remoteItem == null) {
-                     count += syncTwoWayRecursive(context, client, localFile, joinPath(remoteBasePath, name), itemPath, excludedPaths, oldSnapshot, newSnapshot, onLog)
-                     onLog(SyncHistoryLog(message = "Folder sync completed: $name", type = LogType.INFO))
+                     stats += syncTwoWayRecursive(context, client, localFile, joinPath(remoteBasePath, name), itemPath, excludedPaths, oldSnapshot, newSnapshot, onLog)
                 } else if (localFile != null && remoteItem != null) {
-                     count += syncTwoWayRecursive(context, client, localFile, remoteItem.pathDisplay, itemPath, excludedPaths, oldSnapshot, newSnapshot, onLog)
-                     onLog(SyncHistoryLog(message = "Folder sync completed: $name", type = LogType.INFO))
+                     stats += syncTwoWayRecursive(context, client, localFile, remoteItem.pathDisplay, itemPath, excludedPaths, oldSnapshot, newSnapshot, onLog)
                 }
                 continue
             }
@@ -256,17 +290,21 @@ object SyncUtils {
                     newSnapshot[itemPath] = FileSnapshot(itemPath, localHash)
                 } else {
                     if (localChanged && !remoteChanged) {
-                        onLog(SyncHistoryLog(message = "[UPLOAD] Local -> Remote: $name", type = LogType.INFO))
                         if (uploadFile(context, client, localFile.uri, remoteItem.pathDisplay)) {
                              newSnapshot[itemPath] = FileSnapshot(itemPath, localHash)
-                             count++
-                        } else onLog(SyncHistoryLog(message = "ERROR: Failed to upload $name", type = LogType.ERROR))
+                             stats.uploaded++
+                        } else {
+                            onLog(SyncHistoryLog(message = "ERROR: Failed to upload $name", type = LogType.ERROR))
+                            stats.errors++
+                        }
                     } else if (remoteChanged && !localChanged) {
-                         onLog(SyncHistoryLog(message = "[DOWNLOAD] Remote -> Local: $name", type = LogType.INFO))
                          if (downloadFile(context, client, remoteItem.pathDisplay, localFile)) {
                              newSnapshot[itemPath] = FileSnapshot(itemPath, remoteHash)
-                             count++
-                         } else onLog(SyncHistoryLog(message = "ERROR: Failed to download $name", type = LogType.ERROR))
+                             stats.downloaded++
+                         } else {
+                             onLog(SyncHistoryLog(message = "ERROR: Failed to download $name", type = LogType.ERROR))
+                             stats.errors++
+                         }
                     } else {
                         // Conflict
                         onLog(SyncHistoryLog(
@@ -281,41 +319,52 @@ object SyncUtils {
                         if (newFile != null) {
                              if (downloadFile(context, client, remoteItem.pathDisplay, newFile)) {
                                  newSnapshot[itemPath] = FileSnapshot(itemPath, remoteHash)
-                                 count++
+                                 stats.downloaded++
                              }
                         }
                     }
                 }
             } else if (localFile != null && remoteItem == null) {
                 if (wasInSnapshot) {
-                     onLog(SyncHistoryLog(message = "[DELETE] Local: $name", type = LogType.INFO))
-                     if (localFile.delete()) count++ 
-                     else onLog(SyncHistoryLog(message = "ERROR: Failed to delete local $name", type = LogType.ERROR))
+                     if (localFile.delete()) stats.deleted++ 
+                     else {
+                         onLog(SyncHistoryLog(message = "ERROR: Failed to delete local $name", type = LogType.ERROR))
+                         stats.errors++
+                     }
                 } else {
-                    onLog(SyncHistoryLog(message = "[UPLOAD] New Local -> Remote: $name", type = LogType.INFO))
                      if (uploadFile(context, client, localFile.uri, joinPath(remoteBasePath, name))) {
                          newSnapshot[itemPath] = FileSnapshot(itemPath, localHash)
-                         count++
-                     } else onLog(SyncHistoryLog(message = "ERROR: Failed to upload $name", type = LogType.ERROR))
+                         stats.uploaded++
+                     } else {
+                         onLog(SyncHistoryLog(message = "ERROR: Failed to upload $name", type = LogType.ERROR))
+                         stats.errors++
+                     }
                 }
             } else if (localFile == null && remoteItem != null) {
                 if (wasInSnapshot) {
-                     onLog(SyncHistoryLog(message = "[DELETE] Remote: $name", type = LogType.INFO))
-                     if (client.deleteFile(remoteItem.pathDisplay)) count++
-                     else onLog(SyncHistoryLog(message = "ERROR: Failed to delete remote $name", type = LogType.ERROR))
+                     if (client.deleteFile(remoteItem.pathDisplay)) stats.deleted++
+                     else {
+                         onLog(SyncHistoryLog(message = "ERROR: Failed to delete remote $name", type = LogType.ERROR))
+                         stats.errors++
+                     }
                 } else {
-                     onLog(SyncHistoryLog(message = "[DOWNLOAD] New Remote -> Local: $name", type = LogType.INFO))
                      val newFile = localFolder.createFile("application/octet-stream", name)
                      if (newFile != null) {
                          if (downloadFile(context, client, remoteItem.pathDisplay, newFile)) {
                              newSnapshot[itemPath] = FileSnapshot(itemPath, remoteHash)
-                             count++
-                         } else onLog(SyncHistoryLog(message = "ERROR: Failed to download $name", type = LogType.ERROR))
-                     } else onLog(SyncHistoryLog(message = "ERROR: Failed to create file $name", type = LogType.ERROR))
+                             stats.downloaded++
+                         } else {
+                             onLog(SyncHistoryLog(message = "ERROR: Failed to download $name", type = LogType.ERROR))
+                             stats.errors++
+                         }
+                     } else {
+                         onLog(SyncHistoryLog(message = "ERROR: Failed to create file $name", type = LogType.ERROR))
+                         stats.errors++
+                     }
                 }
             }
         }
-        return count
+        return stats
     }
 
     private suspend fun uploadFile(context: Context, client: DropboxClient, uri: Uri, path: String): Boolean {
