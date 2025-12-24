@@ -50,8 +50,12 @@ fun SyncSetupScreen(
                 DocumentsContract.getTreeDocumentId(itemUri)
             }
 
-            if (itemId.startsWith(rootId)) {
-                var relative = itemId.substring(rootId.length)
+            val decodedRoot = Uri.decode(rootId)
+            val decodedItem = Uri.decode(itemId)
+
+            if (decodedItem.startsWith(decodedRoot)) {
+                var relative = decodedItem.substring(decodedRoot.length)
+                
                 // Remove leading separators like ":" or "/"
                 while (relative.startsWith(":") || relative.startsWith("/")) {
                     relative = relative.substring(1)

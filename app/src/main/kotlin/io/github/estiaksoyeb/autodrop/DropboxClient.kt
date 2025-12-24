@@ -56,7 +56,10 @@ class DropboxClient(private val accessToken: String) {
                         ))
                     }
                 } else {
-                    println("Dropbox API Error: ${response.code} - ${response.body?.string()}")
+                    // Suppress 409 (path not found) which is common during initial sync of new folders
+                    if (response.code != 409) {
+                        println("Dropbox API Error: ${response.code} - ${response.body?.string()}")
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -81,7 +84,7 @@ class DropboxClient(private val accessToken: String) {
                 val request = Request.Builder()
                     .url("https://content.dropboxapi.com/2/files/upload")
                     .addHeader("Authorization", "Bearer $accessToken")
-                    .addHeader("Dropbox-API-Arg", jsonArg.toString())
+                    .addHeader("Dropbox-API-Arg", asciiEncode(jsonArg.toString()))
                     .addHeader("Content-Type", "application/octet-stream")
                     .post(requestBody)
                     .build()
@@ -190,7 +193,7 @@ class DropboxClient(private val accessToken: String) {
                 val request = Request.Builder()
                     .url("https://content.dropboxapi.com/2/files/download")
                     .addHeader("Authorization", "Bearer $accessToken")
-                    .addHeader("Dropbox-API-Arg", jsonArg.toString())
+                    .addHeader("Dropbox-API-Arg", asciiEncode(jsonArg.toString()))
                     .post("".toRequestBody(null)) // Empty body
                     .build()
 
@@ -206,5 +209,18 @@ class DropboxClient(private val accessToken: String) {
             }
             false
         }
+    }
+    
+    // Helper to escape non-ASCII characters for HTTP headers
+    private fun asciiEncode(str: String): String {
+        val sb = StringBuilder()
+        for (c in str) {
+            if (c.code <= 127) {
+                sb.append(c)
+            } else {
+                sb.append(String.format("\\u%04x", c.code))
+            }
+        }
+        return sb.toString()
     }
 }

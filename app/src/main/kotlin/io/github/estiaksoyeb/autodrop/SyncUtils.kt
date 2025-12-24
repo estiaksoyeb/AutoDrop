@@ -39,6 +39,7 @@ object SyncUtils {
         onLog: (SyncHistoryLog) -> Unit
     ): Int {
         onLog(SyncHistoryLog(message = "=== Sync started (${pair.dropboxPath}) ===", type = LogType.START))
+        println("DEBUG: performSync excludedPaths=${pair.excludedPaths}")
         
         val localFolder = DocumentFile.fromTreeUri(context, Uri.parse(pair.localUri))
         if (localFolder == null) {
@@ -392,7 +393,29 @@ object SyncUtils {
     }
     
     private fun isExcluded(path: String, excludedPaths: List<String>): Boolean {
-         return excludedPaths.any { path == it || path.startsWith("$it/") || (it.contains("/") && path.endsWith("/$it")) || path == it }
+         val normalizedPath = path.trim('/')
+         // println("DEBUG: Checking '$normalizedPath' against $excludedPaths")
+         
+         return excludedPaths.any { rawExclusion ->
+             val normalizedExclusion = rawExclusion.trim('/')
+             val decodedExclusion = Uri.decode(normalizedExclusion)
+             
+             // Check raw
+             if (normalizedPath.equals(normalizedExclusion, ignoreCase = true) || 
+                 normalizedPath.startsWith("$normalizedExclusion/", ignoreCase = true)) {
+                 println("DEBUG: Excluded '$path' (matched raw '$normalizedExclusion')")
+                 return@any true
+             }
+                 
+             // Check decoded
+             if (normalizedPath.equals(decodedExclusion, ignoreCase = true) || 
+                 normalizedPath.startsWith("$decodedExclusion/", ignoreCase = true)) {
+                 println("DEBUG: Excluded '$path' (matched decoded '$decodedExclusion')")
+                 return@any true
+             }
+                 
+             false
+         }
     }
     
     private fun appendConflict(name: String): String {
